@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=IP Calculator
+GenericName=Subnet Calculator
+Comment=IPv4/IPv6 subnet calculator (conversions, classes, subnets, CIDR, IPv6)
+Exec=ip-calculator
+Icon=ip-calculator
+Terminal=false
+Categories=Network;Utility;
+Keywords=IP;IPv4;IPv6;Subnet;CIDR;Netmask;Network;
+StartupWMClass=ip-calculator
