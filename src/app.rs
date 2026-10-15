@@ -3,8 +3,8 @@
 use std::collections::HashSet;
 
 use eframe::egui::{
-    self, text::LayoutJob, Align, Align2, Color32, FontId, RichText, Sense, Stroke, TextFormat,
-    TextStyle, Ui, Vec2,
+    self, text::LayoutJob, Align, Align2, Color32, FontId, RichText, Sense, TextFormat, TextStyle,
+    Ui, Vec2,
 };
 use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
@@ -120,11 +120,11 @@ pub struct App {
     scroll_cidr: bool,
     scroll_v6: bool,
     about: bool,
+    logo: egui::TextureHandle,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        install_fonts(&cc.egui_ctx);
         let s: Settings = cc
             .storage
             .and_then(|st| eframe::get_value(st, eframe::APP_KEY))
@@ -141,8 +141,10 @@ impl App {
             scroll_cidr: true,
             scroll_v6: true,
             about: false,
+            logo: load_logo(&cc.egui_ctx),
         };
         app.set_v4(app.s.v4, Src::Other);
+        crate::theme::apply(&cc.egui_ctx, app.s.dark);
         app
     }
 
@@ -173,34 +175,6 @@ impl App {
             self.collapsed.remove(&p);
             i = Some(p);
         }
-    }
-
-    fn apply_style(&self, ctx: &egui::Context) {
-        // egui's default greys are soft; text and borders are darkened (light)
-        // or brightened (dark) for readability.
-        let (mut v, panel, field, stripe, text, strong, border, frame, button) = if self.s.dark {
-            (egui::Visuals::dark(), 30, 16, 40, 225, 255, 115, 80, 58)
-        } else {
-            (egui::Visuals::light(), 240, 255, 230, 20, 0, 115, 150, 225)
-        };
-        let gray = Color32::from_gray;
-        v.panel_fill = gray(panel);
-        v.window_fill = gray(panel);
-        v.extreme_bg_color = gray(field);
-        v.faint_bg_color = gray(stripe);
-        v.widgets.noninteractive.fg_stroke = Stroke::new(1.0f32, gray(text));
-        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0f32, gray(frame));
-        v.widgets.inactive.fg_stroke = Stroke::new(1.0f32, gray(text));
-        v.widgets.inactive.bg_stroke = Stroke::new(1.0f32, gray(border));
-        v.widgets.inactive.bg_fill = gray(button);
-        v.widgets.inactive.weak_bg_fill = gray(button);
-        v.widgets.hovered.fg_stroke = Stroke::new(1.5f32, gray(strong));
-        v.widgets.active.fg_stroke = Stroke::new(2.0f32, gray(strong));
-        v.widgets.hovered.bg_stroke = Stroke::new(1.0f32, Color32::from_rgb(0, 120, 215));
-        v.error_fg_color = tone(self.s.dark, (185, 0, 0), (255, 120, 120));
-        v.selection.bg_fill = Color32::from_rgb(0, 102, 204);
-        v.selection.stroke = Stroke::new(1.0f32, Color32::WHITE);
-        ctx.set_visuals(v);
     }
 
     // ------------------------------------------------------------- widgets
@@ -756,7 +730,7 @@ impl App {
                     let weak = t.is_abstract() && !selected;
                     let color = |ui: &Ui| {
                         if selected {
-                            Color32::WHITE
+                            ui.visuals().selection.stroke.color
                         } else if weak {
                             ui.visuals().weak_text_color()
                         } else {
@@ -946,7 +920,9 @@ impl App {
                     "Allow 1 Host Bit (RFC 3021)",
                 );
                 ui.separator();
-                ui.checkbox(&mut self.s.dark, "Dark Theme");
+                if ui.checkbox(&mut self.s.dark, "Dark Theme").changed() {
+                    crate::theme::apply(ui.ctx(), self.s.dark);
+                }
             });
             ui.menu_button("Help", |ui| {
                 if ui.button("About IP Calculator").clicked() {
@@ -1009,7 +985,11 @@ impl App {
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.heading(format!("IP Calculator {}", env!("CARGO_PKG_VERSION")));
+                    ui.label(
+                        RichText::new(format!("IP Calculator {}", env!("CARGO_PKG_VERSION")))
+                            .heading()
+                            .color(crate::theme::accent(ui.visuals().dark_mode)),
+                    );
                     ui.label("IPv4/IPv6 subnet calculator written in Rust.");
                     ui.add_space(10.0);
                     ui.separator();
@@ -1025,10 +1005,9 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.apply_style(ctx);
         egui::TopBottomPanel::top("menu").show(ctx, |ui| self.menu(ui));
         egui::CentralPanel::default().show(ctx, |ui| {
-            header(ui);
+            header(ui, &self.logo);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for (tab, name) in Tab::ALL {
@@ -1069,22 +1048,6 @@ impl eframe::App for App {
 }
 
 // ------------------------------------------------------------------ helpers
-
-/// Uses DejaVu Sans for proportional text; egui's built-in font is a thin
-/// light weight. The built-in fonts stay as fallback (symbols, emoji).
-fn install_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        "DejaVuSans".into(),
-        egui::FontData::from_static(include_bytes!("../assets/fonts/DejaVuSans.ttf")),
-    );
-    fonts
-        .families
-        .entry(egui::FontFamily::Proportional)
-        .or_default()
-        .insert(0, "DejaVuSans".into());
-    ctx.set_fonts(fonts);
-}
 
 fn remember(history: &mut Vec<String>, entry: &str) {
     if entry.is_empty() {
@@ -1191,7 +1154,7 @@ fn tone(dark: bool, light: (u8, u8, u8), dark_rgb: (u8, u8, u8)) -> Color32 {
 fn bit_color(c: char, ui: &Ui) -> Color32 {
     let dark = ui.visuals().dark_mode;
     match c {
-        's' | 'c' => tone(dark, (0, 70, 190), (130, 185, 255)),
+        's' | 'c' => crate::theme::accent(dark),
         'h' => tone(dark, (0, 115, 45), (110, 215, 140)),
         'm' => tone(dark, (135, 45, 175), (215, 160, 245)),
         'x' | 'r' => ui.visuals().weak_text_color(),
@@ -1231,7 +1194,7 @@ fn bit_usage(ui: &mut Ui, pattern: &str) {
     }
     egui::Frame::none()
         .fill(ui.visuals().extreme_bg_color)
-        .stroke(ui.visuals().widgets.inactive.bg_stroke)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
         .inner_margin(egui::Margin::symmetric(4.0, 3.0))
         .rounding(2.0)
         .show(ui, |ui| {
@@ -1248,7 +1211,7 @@ fn table_frame(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 fn table_frame_h(ui: &mut Ui, height: f32, add: impl FnOnce(&mut Ui)) {
     egui::Frame::none()
         .fill(ui.visuals().extreme_bg_color)
-        .stroke(ui.visuals().widgets.inactive.bg_stroke)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
         .inner_margin(2.0)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -1261,9 +1224,9 @@ fn cell(row: &mut egui_extras::TableRow<'_, '_>, text: &str, selected: bool, ind
     row.col(|ui| {
         let mut t = RichText::new(text);
         if selected {
-            t = t.color(Color32::WHITE);
+            t = t.color(ui.visuals().selection.stroke.color);
         } else if index {
-            t = t.color(tone(ui.visuals().dark_mode, (165, 20, 20), (255, 130, 130)));
+            t = t.color(crate::theme::accent(ui.visuals().dark_mode));
         }
         if index {
             t = t.strong();
@@ -1272,65 +1235,46 @@ fn cell(row: &mut egui_extras::TableRow<'_, '_>, text: &str, selected: bool, ind
     });
 }
 
-const LOGO_BG: Color32 = Color32::from_rgb(31, 78, 121);
-const LOGO_LINE: Color32 = Color32::from_rgb(156, 195, 230);
-const LOGO_ACCENT: Color32 = Color32::from_rgb(245, 166, 35);
-
-/// Paints the logo (a network split into three subnets, one selected) into a
-/// square of side `size` at `min`. Drawn on a 32×32 grid, like `packaging/ip-calculator.svg`.
-fn paint_logo(p: &egui::Painter, min: egui::Pos2, size: f32) {
-    let k = size / 32.0;
-    let at = |x: f32, y: f32| min + Vec2::new(x, y) * k;
-    let square = |x: f32, y: f32| egui::Rect::from_center_size(at(x, y), Vec2::splat(7.0 * k));
-    p.rect_filled(
-        egui::Rect::from_min_size(min, Vec2::splat(size)),
-        7.0 * k,
-        LOGO_BG,
+/// The application icon (`packaging/make_icon.py`), shown in the header.
+fn load_logo(ctx: &egui::Context) -> egui::TextureHandle {
+    let img = eframe::icon_data::from_png_bytes(include_bytes!("../packaging/ip-calculator.png"))
+        .expect("embedded icon");
+    let ci = egui::ColorImage::from_rgba_unmultiplied(
+        [img.width as usize, img.height as usize],
+        &img.rgba,
     );
-    let line = Stroke::new(1.8 * k, LOGO_LINE);
-    p.line_segment([at(16.0, 8.5), at(16.0, 23.5)], line);
-    p.line_segment([at(7.0, 15.5), at(25.0, 15.5)], line);
-    p.line_segment([at(7.0, 15.5), at(7.0, 23.5)], line);
-    p.line_segment([at(25.0, 15.5), at(25.0, 23.5)], line);
-    p.circle_filled(at(16.0, 8.5), 3.8 * k, Color32::WHITE);
-    p.rect_filled(square(7.0, 23.5), 1.5 * k, LOGO_LINE);
-    p.rect_filled(square(16.0, 23.5), 1.5 * k, LOGO_ACCENT);
-    p.rect_filled(square(25.0, 23.5), 1.5 * k, LOGO_LINE);
+    ctx.load_texture("logo", ci, egui::TextureOptions::LINEAR)
 }
 
-/// Logo and subtitle, drawn rather than loaded from an image.
-fn header(ui: &mut Ui) {
+/// Logo and subtitle.
+fn header(ui: &mut Ui, logo: &egui::TextureHandle) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 86.0), Sense::hover());
     let p = ui.painter_at(rect);
-    let logo = FontId::proportional(40.0);
-    let grey = if ui.visuals().dark_mode {
-        Color32::from_gray(225)
-    } else {
-        Color32::from_gray(55)
-    };
-    // Blue of the logo family; the dark variant would vanish on a dark panel.
-    let blue = if ui.visuals().dark_mode {
-        LOGO_LINE
-    } else {
-        Color32::from_rgb(46, 117, 182)
-    };
-    let galley_ip = p.layout_no_wrap("ip".into(), logo.clone(), blue);
-    let galley_calc = p.layout_no_wrap("calc".into(), logo, grey);
+    let font = FontId::proportional(40.0);
+    let accent = crate::theme::accent(ui.visuals().dark_mode);
+    let text = ui.visuals().text_color();
+    let galley_ip = p.layout_no_wrap("ip".into(), font.clone(), accent);
+    let galley_calc = p.layout_no_wrap("calc".into(), font, text);
     let icon = 54.0;
     let gap = 10.0;
     let w = icon + gap + galley_ip.size().x + galley_calc.size().x;
     let x = rect.center().x - w / 2.0;
-    paint_logo(&p, egui::pos2(x, rect.top() + 4.0), icon);
+    p.image(
+        logo.id(),
+        egui::Rect::from_min_size(egui::pos2(x, rect.top() + 4.0), Vec2::splat(icon)),
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
     let tx = x + icon + gap;
     let y = rect.top() + 8.0;
-    p.galley(egui::pos2(tx, y), galley_ip.clone(), blue);
-    p.galley(egui::pos2(tx + galley_ip.size().x, y), galley_calc, grey);
+    p.galley(egui::pos2(tx, y), galley_ip.clone(), accent);
+    p.galley(egui::pos2(tx + galley_ip.size().x, y), galley_calc, text);
     p.text(
         egui::pos2(rect.center().x, rect.bottom() - 10.0),
         Align2::CENTER_CENTER,
         "IPv4 / IPv6 Subnet Calculator",
         FontId::proportional(16.0),
-        ui.visuals().strong_text_color(),
+        ui.visuals().weak_text_color(),
     );
 }
 
@@ -1343,8 +1287,8 @@ fn format_bar(ui: &mut Ui, fields: &[ipv6::Field], type_name: &str) {
     let dark = ui.visuals().dark_mode;
     let small = FontId::proportional(11.0);
     let text = ui.visuals().text_color();
-    let label_c = tone(dark, (0, 70, 190), (130, 185, 255));
-    let value_c = tone(dark, (165, 45, 0), (255, 175, 115));
+    let label_c = ui.visuals().weak_text_color();
+    let value_c = crate::theme::accent(dark);
     let bar_top = rect.top() + 16.0;
     let bar_h = 22.0;
     let mut x = rect.left() + 2.0;
@@ -1363,8 +1307,8 @@ fn format_bar(ui: &mut Ui, fields: &[ipv6::Field], type_name: &str) {
         p.rect(
             seg.shrink2(Vec2::new(1.0, 0.0)),
             3.0,
-            Color32::from_gray(if dark { 52 } else { 226 }),
-            Stroke::new(1.0f32, Color32::from_gray(if dark { 130 } else { 115 })),
+            ui.visuals().widgets.inactive.bg_fill,
+            ui.visuals().widgets.noninteractive.bg_stroke,
         );
         clip.text(
             seg.center(),

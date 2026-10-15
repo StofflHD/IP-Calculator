@@ -3,6 +3,7 @@
 mod app;
 mod ipv4;
 mod ipv6;
+mod theme;
 
 fn main() -> eframe::Result {
     let mut viewport = eframe::egui::ViewportBuilder::default()
