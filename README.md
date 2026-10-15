@@ -42,6 +42,10 @@ and newer). For older distributions, build on an older system or in an older con
   [notepad-rs](https://github.com/StofflHD/notepad-rs)
 - `packaging/` – desktop file, icon (`make_icon.py`, needs pycairo), AppRun, build script
 
+## License
+
+GPL-3.0-or-later, see [LICENSE](LICENSE). The licence is also shown under *Help → About*.
+
 ---
 
 © StofflHD and Claude

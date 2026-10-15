@@ -16,6 +16,9 @@ const HISTORY_LEN: usize = 20;
 /// Tables longer than this show a window around the selected row.
 const MAX_ROWS: u64 = 1 << 20;
 const ROW_H: f32 = 18.0;
+/// Full text of the GPL-3.0, shown in the About window (CR are dropped when shown: Windows
+/// checkouts may have CRLF line endings).
+const LICENSE: &str = include_str!("../LICENSE");
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 enum Tab {
@@ -982,6 +985,7 @@ impl App {
             .open(&mut self.about)
             .collapsible(false)
             .resizable(false)
+            .max_width(520.0)
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
@@ -994,6 +998,33 @@ impl App {
                     ui.add_space(10.0);
                     ui.separator();
                     ui.label(RichText::new(env!("CARGO_PKG_AUTHORS")).strong());
+                    ui.add_space(6.0);
+                    ui.label("License: GNU General Public License v3.0 or later");
+                    ui.label(
+                        RichText::new(
+                            "This program comes with ABSOLUTELY NO WARRANTY. It is free \
+                             software: you can redistribute it and/or modify it under the \
+                             terms of the GPL.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                    ui.hyperlink_to(
+                        "gnu.org/licenses/gpl-3.0",
+                        "https://www.gnu.org/licenses/gpl-3.0.html",
+                    );
+                });
+                ui.add_space(4.0);
+                egui::CollapsingHeader::new("License Text").show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(260.0)
+                        .show(ui, |ui| {
+                            // Wide enough for the 77 columns of the GPL text.
+                            ui.set_min_width(470.0);
+                            let text = RichText::new(LICENSE.replace('\r', ""))
+                                .font(FontId::monospace(10.0));
+                            ui.add(egui::Label::new(text).wrap());
+                        });
                 });
             });
     }
