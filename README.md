@@ -11,7 +11,8 @@ IPv4/IPv6 subnet calculator in the style of the Bitcricket IP Calculator, shippe
 | IPv6 | Address type tree (collapsible), format bar with decoded fields (Teredo, 6to4, ISATAP …), expanded form, reverse DNS |
 | Info | Special-purpose blocks (RFC 1918, 6598, 5737 …), IPv4-mapped address, 6to4 prefix, reverse DNS |
 
-- **Options**: *Allow 1 Subnet Bit (RFC 1878)*, *Allow 1 Host Bit (RFC 3021)*, Dark Theme.
+- **Options**: *Allow 1 Subnet Bit (RFC 1878)*, *Allow 1 Host Bit (RFC 3021)*, Dark Theme
+  (the "Rust" scheme of notepad-rs: warm neutrals with an orange accent).
   Without RFC 1878, subnet zero and the all-ones subnet are excluded (RFC 950).
 - Address entry with history (▾). Input such as `10.20.0.0/22` or `10.20.0.0/255.255.252.0`
   also sets the mask (the block mask on the CIDR tab).
@@ -37,8 +38,9 @@ and newer). For older distributions, build on an older system or in an older con
 - `src/ipv4.rs` – conversions, classes, subnetting, CIDR, special-purpose registry (with tests)
 - `src/ipv6.rs` – type classification (longest prefix match) and field layout (with tests)
 - `src/app.rs` – user interface (eframe/egui 0.29)
-- `packaging/` – desktop file, icon, AppRun, build script
-- `assets/fonts/` – DejaVu Sans (embedded in the binary), licence in `LICENSE-DejaVu.txt`
+- `src/theme.rs` – UI colour scheme "Rust" (dark and light), shared with
+  [notepad-rs](https://github.com/StofflHD/notepad-rs)
+- `packaging/` – desktop file, icon (`make_icon.py`, needs pycairo), AppRun, build script
 
 ---
 
