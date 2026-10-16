@@ -19,13 +19,18 @@ IPv4/IPv6 subnet calculator in the style of the Bitcricket IP Calculator, shippe
 - Clicking a table row selects its address, right-click copies it. *File* copies the
   subnet or route list as CSV to the clipboard.
 - Settings, history and the last addresses are stored in `~/.local/share/ip-calculator/`.
+- **Updates** (*Help → Check for Updates*): checks the GitHub releases, downloads the new
+  AppImage, verifies its SHA-256 checksum (`.sha256` asset of the release) and replaces the running
+  AppImage; *Restart Now* starts the new version. By default this is checked once a day at start-up
+  (*Help → Check for Updates at Start-up*, or `IPC_NO_UPDATE=1`). HTTP goes through `curl` or
+  `wget`; a proxy can be set under *Help → Updater Proxy*. Same updater as notepad-rs.
 
 ## Building
 
 ```bash
 cargo test                          # test the calculation core
 cargo run --release                 # run directly
-packaging/build-appimage.sh         # -> dist/IP-Calculator-<version>-x86_64.AppImage
+packaging/build-appimage.sh         # -> dist/IP-Calculator-<version>-x86_64.AppImage (+ .sha256)
 ```
 
 The script downloads `appimagetool` when needed (or set `APPIMAGETOOL=/path/to/tool`).
@@ -38,6 +43,7 @@ and newer). For older distributions, build on an older system or in an older con
 - `src/ipv4.rs` – conversions, classes, subnetting, CIDR, special-purpose registry (with tests)
 - `src/ipv6.rs` – type classification (longest prefix match) and field layout (with tests)
 - `src/app.rs` – user interface (eframe/egui 0.29)
+- `src/update.rs` – updater (GitHub releases, SHA-256 check, replaces the AppImage; with tests)
 - `src/theme.rs` – UI colour scheme "Rust" (dark and light), shared with
   [notepad-rs](https://github.com/StofflHD/notepad-rs)
 - `packaging/` – desktop file, icon (`make_icon.py`, needs pycairo), AppRun, build script

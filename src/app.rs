@@ -1,6 +1,8 @@
 //! The calculator window: menus, header, tabs.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::mpsc::{channel, Receiver};
 
 use eframe::egui::{
     self, text::LayoutJob, Align, Align2, Color32, FontId, RichText, Sense, TextFormat, TextStyle,
@@ -11,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ipv4::{self, Class, SubnetPlan};
 use crate::ipv6;
+use crate::update;
 
 const HISTORY_LEN: usize = 20;
 /// Tables longer than this show a window around the selected row.
@@ -56,6 +59,14 @@ struct Settings {
     cidr_bits: u8,
     v4_history: Vec<String>,
     v6_history: Vec<String>,
+    /// Look for a new release at start-up (at most once a day).
+    update_auto_check: bool,
+    /// Unix time of the last automatic check.
+    update_last_check: i64,
+    /// Version the user chose to skip (the automatic check stays quiet about it).
+    update_skip: String,
+    /// Proxy for the updater, e.g. `http://proxy:3128` (empty = none).
+    update_proxy: String,
 }
 
 impl Default for Settings {
@@ -72,6 +83,10 @@ impl Default for Settings {
             cidr_bits: 8,
             v4_history: Vec::new(),
             v6_history: Vec::new(),
+            update_auto_check: true,
+            update_last_check: 0,
+            update_skip: String::new(),
+            update_proxy: String::new(),
         }
     }
 }
@@ -124,6 +139,27 @@ pub struct App {
     scroll_v6: bool,
     about: bool,
     logo: egui::TextureHandle,
+    update: Option<UpdateDlg>,
+    update_rx: Option<Receiver<update::Msg>>,
+    /// "Updater Proxy" dialog (edited value).
+    proxy_dlg: Option<String>,
+    /// AppImage to start once this process has exited ("Restart Now" after an update).
+    restart_exe: Option<PathBuf>,
+}
+
+enum UpdateState {
+    Checking,
+    UpToDate,
+    Available(update::Release),
+    Installing,
+    Installed(PathBuf),
+    Error(String),
+}
+
+struct UpdateDlg {
+    state: UpdateState,
+    /// Opened from the menu (an automatic check only shows a found update).
+    manual: bool,
 }
 
 impl App {
@@ -145,9 +181,24 @@ impl App {
             scroll_v6: true,
             about: false,
             logo: load_logo(&cc.egui_ctx),
+            update: None,
+            update_rx: None,
+            proxy_dlg: None,
+            restart_exe: None,
         };
         app.set_v4(app.s.v4, Src::Other);
         crate::theme::apply(&cc.egui_ctx, app.s.dark);
+        // Automatic update check (at most once a day, in the background).
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        if app.s.update_auto_check
+            && std::env::var_os("IPC_NO_UPDATE").is_none()
+            && now - app.s.update_last_check >= 86_400
+        {
+            app.s.update_last_check = now;
+            app.start_update_check(&cc.egui_ctx, false);
+        }
         app
     }
 
@@ -928,6 +979,27 @@ impl App {
                 }
             });
             ui.menu_button("Help", |ui| {
+                if ui.button("Check for Updates …").clicked() {
+                    self.start_update_check(ui.ctx(), true);
+                    ui.close_menu();
+                }
+                ui.checkbox(
+                    &mut self.s.update_auto_check,
+                    "Check for Updates at Start-up",
+                );
+                if ui.button("Updater Proxy …").clicked() {
+                    self.proxy_dlg = Some(self.s.update_proxy.clone());
+                    ui.close_menu();
+                }
+                if !self.s.update_skip.is_empty()
+                    && ui
+                        .button(format!("Stop Skipping Version {}", self.s.update_skip))
+                        .clicked()
+                {
+                    self.s.update_skip.clear();
+                    ui.close_menu();
+                }
+                ui.separator();
                 if ui.button("About IP Calculator").clicked() {
                     self.about = true;
                     ui.close_menu();
@@ -978,6 +1050,245 @@ impl App {
             );
         }
         out
+    }
+
+    // ------------------------------------------------------------- updater
+
+    fn start_update_check(&mut self, ctx: &egui::Context, manual: bool) {
+        if self.update_rx.is_some() {
+            if manual {
+                self.update.get_or_insert(UpdateDlg {
+                    state: UpdateState::Checking,
+                    manual,
+                });
+            }
+            return;
+        }
+        let (tx, rx) = channel();
+        let ctx2 = ctx.clone();
+        update::spawn_check(self.s.update_proxy.clone(), tx, move || {
+            ctx2.request_repaint()
+        });
+        self.update_rx = Some(rx);
+        if manual {
+            self.update = Some(UpdateDlg {
+                state: UpdateState::Checking,
+                manual,
+            });
+        }
+    }
+
+    fn start_update_install(&mut self, ctx: &egui::Context, rel: update::Release) {
+        let Some(target) = update::running_appimage() else {
+            return;
+        };
+        let (tx, rx) = channel();
+        let ctx2 = ctx.clone();
+        update::spawn_install(rel, target, self.s.update_proxy.clone(), tx, move || {
+            ctx2.request_repaint()
+        });
+        self.update_rx = Some(rx);
+        self.update = Some(UpdateDlg {
+            state: UpdateState::Installing,
+            manual: true,
+        });
+    }
+
+    fn poll_update(&mut self) {
+        let Some(rx) = &self.update_rx else { return };
+        let Ok(msg) = rx.try_recv() else { return };
+        self.update_rx = None;
+        let manual = self.update.as_ref().is_some_and(|u| u.manual);
+        let state = match msg {
+            update::Msg::Checked(Ok(Some(rel))) if manual || rel.version != self.s.update_skip => {
+                Some(UpdateState::Available(rel))
+            }
+            update::Msg::Checked(Ok(_)) => manual.then_some(UpdateState::UpToDate),
+            update::Msg::Checked(Err(e)) => manual.then_some(UpdateState::Error(e)),
+            update::Msg::Installed(Ok(p)) => Some(UpdateState::Installed(p)),
+            update::Msg::Installed(Err(e)) => Some(UpdateState::Error(e)),
+        };
+        self.update = state.map(|state| UpdateDlg { state, manual });
+    }
+
+    fn update_window(&mut self, ctx: &egui::Context) {
+        let Some(dlg) = self.update.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut keep = true;
+        let mut action: Option<u8> = None; // 1 install, 2 release page, 3 skip, 4 restart
+        let current = env!("CARGO_PKG_VERSION");
+        egui::Window::new("Update IP Calculator")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.set_min_width(380.0);
+                match &dlg.state {
+                    UpdateState::Checking => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Checking for updates …");
+                        });
+                    }
+                    UpdateState::Installing => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Downloading and verifying the update …");
+                        });
+                    }
+                    UpdateState::UpToDate => {
+                        ui.label(format!("IP Calculator {current} is up to date."));
+                        if ui.button("OK").clicked() {
+                            keep = false;
+                        }
+                    }
+                    UpdateState::Available(rel) => {
+                        ui.label(
+                            RichText::new(format!(
+                                "IP Calculator {} is available (installed: {current}).",
+                                rel.version
+                            ))
+                            .strong(),
+                        );
+                        if !rel.notes.trim().is_empty() {
+                            egui::ScrollArea::vertical()
+                                .max_height(220.0)
+                                .show(ui, |ui| {
+                                    ui.label(rel.notes.trim());
+                                });
+                        }
+                        let appimage = update::running_appimage();
+                        if appimage.is_none() {
+                            ui.label(
+                                RichText::new(
+                                    "Not started from an AppImage: download the new version \
+                                     from the release page.",
+                                )
+                                .weak(),
+                            );
+                        } else if rel.appimage.is_none() {
+                            ui.label(
+                                RichText::new("The release has no AppImage for this system.")
+                                    .weak(),
+                            );
+                        }
+                        ui.horizontal(|ui| {
+                            if appimage.is_some()
+                                && rel.appimage.is_some()
+                                && ui.button("Update Now").clicked()
+                            {
+                                action = Some(1);
+                            }
+                            if ui.button("Open Release Page").clicked() {
+                                action = Some(2);
+                            }
+                            if ui.button("Later").clicked() {
+                                keep = false;
+                            }
+                            if ui.button("Skip This Version").clicked() {
+                                action = Some(3);
+                            }
+                        });
+                    }
+                    UpdateState::Installed(p) => {
+                        ui.label("The update has been installed. It takes effect after a restart.");
+                        ui.label(RichText::new(p.display().to_string()).weak());
+                        ui.horizontal(|ui| {
+                            if ui.button("Restart Now").clicked() {
+                                action = Some(4);
+                            }
+                            if ui.button("Later").clicked() {
+                                keep = false;
+                            }
+                        });
+                    }
+                    UpdateState::Error(e) => {
+                        ui.label(RichText::new("The update failed:").strong());
+                        ui.label(e);
+                        ui.horizontal(|ui| {
+                            if ui.button("Open Release Page").clicked() {
+                                action = Some(2);
+                            }
+                            if ui.button("OK").clicked() {
+                                keep = false;
+                            }
+                        });
+                    }
+                }
+            });
+        let busy = matches!(dlg.state, UpdateState::Checking | UpdateState::Installing);
+        if !busy && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            keep = false;
+        }
+        match (action, &dlg.state) {
+            (Some(1), UpdateState::Available(rel)) => {
+                let rel = rel.clone();
+                self.start_update_install(ctx, rel);
+                return;
+            }
+            (Some(2), UpdateState::Available(rel)) => {
+                ctx.open_url(egui::OpenUrl::new_tab(&rel.page));
+                keep = false;
+            }
+            (Some(2), _) => {
+                ctx.open_url(egui::OpenUrl::new_tab(update::releases_page()));
+                keep = false;
+            }
+            (Some(3), UpdateState::Available(rel)) => {
+                self.s.update_skip = rel.version.clone();
+                keep = false;
+            }
+            (Some(4), UpdateState::Installed(p)) => {
+                self.restart_exe = Some(p.clone());
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                keep = false;
+            }
+            _ => {}
+        }
+        // A running check/download continues in the background when the window is closed.
+        if open && keep {
+            self.update = Some(dlg);
+        }
+    }
+
+    fn proxy_window(&mut self, ctx: &egui::Context) {
+        let Some(mut proxy) = self.proxy_dlg.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut keep = true;
+        egui::Window::new("Updater Proxy")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Proxy for update checks and downloads (empty = none):");
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut proxy)
+                        .hint_text("http://proxy.example:3128")
+                        .desired_width(320.0),
+                );
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() || enter {
+                        self.s.update_proxy = proxy.trim().to_string();
+                        keep = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        keep = false;
+                    }
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            keep = false;
+        }
+        if open && keep {
+            self.proxy_dlg = Some(proxy);
+        }
     }
 
     fn about_window(&mut self, ctx: &egui::Context) {
@@ -1036,6 +1347,12 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_update();
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if let Some(exe) = self.restart_exe.take() {
+                update::restart_when_exited(&exe);
+            }
+        }
         egui::TopBottomPanel::top("menu").show(ctx, |ui| self.menu(ui));
         egui::CentralPanel::default().show(ctx, |ui| {
             header(ui, &self.logo);
@@ -1075,6 +1392,8 @@ impl eframe::App for App {
                 });
         });
         self.about_window(ctx);
+        self.update_window(ctx);
+        self.proxy_window(ctx);
     }
 }
 

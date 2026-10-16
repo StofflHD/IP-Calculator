@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds dist/IP-Calculator-<version>-x86_64.AppImage.
+# Builds dist/IP-Calculator-<version>-x86_64.AppImage and its .sha256 file.
 #
 # The binary links only against glibc; OpenGL, X11/Wayland and xkbcommon are
 # loaded at runtime from the host system, as with any desktop application.
@@ -43,4 +43,6 @@ OUT="$DIST/IP-Calculator-$VERSION-x86_64.AppImage"
 ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream "$APPDIR" "$OUT.new"
 chmod +x "$OUT.new"
 mv -f "$OUT.new" "$OUT"
+# Checksum for the built-in updater (uploaded with the AppImage as a release asset).
+(cd "$DIST" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256")
 echo "==> Done: $OUT"
