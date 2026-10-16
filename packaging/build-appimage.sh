@@ -5,6 +5,7 @@
 # loaded at runtime from the host system, as with any desktop application.
 #
 # Requirements: Rust toolchain (cargo), curl (only if appimagetool is not cached).
+# Optional: cargo-zigbuild + zig to build for an older glibc (ZIGBUILD=1, GLIBC=2.31), as in CI.
 # Usage:  packaging/build-appimage.sh      (APPIMAGETOOL=/path/to/tool to skip the download)
 set -euo pipefail
 
@@ -16,12 +17,19 @@ VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
 CARGO="${CARGO:-$(command -v cargo || echo "$HOME/.cargo/bin/cargo")}"
 
 echo "==> IP Calculator $VERSION"
-"$CARGO" build --release --manifest-path "$ROOT/Cargo.toml"
+if [ "${ZIGBUILD:-0}" = "1" ]; then
+    GLIBC="${GLIBC:-2.31}"
+    "$CARGO" zigbuild --release --target "x86_64-unknown-linux-gnu.$GLIBC" --manifest-path "$ROOT/Cargo.toml"
+    BIN="$ROOT/target/x86_64-unknown-linux-gnu/release/ip-calculator"
+else
+    "$CARGO" build --release --manifest-path "$ROOT/Cargo.toml"
+    BIN="$ROOT/target/release/ip-calculator"
+fi
 
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" \
          "$APPDIR/usr/share/icons/hicolor/256x256/apps" "$APPDIR/usr/share/icons/hicolor/scalable/apps" "$DIST"
-install -m 755 "$ROOT/target/release/ip-calculator" "$APPDIR/usr/bin/"
+install -m 755 "$BIN" "$APPDIR/usr/bin/"
 install -m 755 "$ROOT/packaging/AppRun" "$APPDIR/AppRun"
 cp "$ROOT/packaging/ip-calculator.desktop" "$APPDIR/"
 cp "$ROOT/packaging/ip-calculator.desktop" "$APPDIR/usr/share/applications/"

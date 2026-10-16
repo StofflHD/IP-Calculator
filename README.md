@@ -35,8 +35,14 @@ packaging/build-appimage.sh         # -> dist/IP-Calculator-<version>-x86_64.App
 
 The script downloads `appimagetool` when needed (or set `APPIMAGETOOL=/path/to/tool`).
 
-The binary depends only on the glibc of the build system (here 2.39 → Debian 13, Ubuntu 24.04
-and newer). For older distributions, build on an older system or in an older container.
+The binary depends only on glibc. A plain build needs the glibc of the build system; with
+`ZIGBUILD=1` (needs `cargo-zigbuild` and zig) it targets glibc 2.31 (`GLIBC=2.31`, Ubuntu 20.04,
+Debian 11 and newer), as the releases do.
+
+**CI** (`.github/workflows/appimage.yml`) runs the tests, builds the AppImage with zigbuild, checks
+the glibc requirement and starts it on Xvfb (screenshots as artifact) on every push and pull
+request. A tag `v<version>` (matching `Cargo.toml`) publishes the pre-release with the AppImage and
+its `.sha256` file for the updater.
 
 ## Layout
 
